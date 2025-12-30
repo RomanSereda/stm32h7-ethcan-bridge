@@ -24,6 +24,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "string.h"
+#include "lwip/apps/mqtt.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -45,6 +46,8 @@
 
 UART_HandleTypeDef hlpuart1;
 
+RNG_HandleTypeDef hrng;
+
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
@@ -53,7 +56,9 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
-
+mqtt_client_t *static_client;
+ip_addr_t broker_ip;
+const char *topic = "stm32/test";
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -61,14 +66,30 @@ void SystemClock_Config(void);
 static void MPU_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_LPUART1_UART_Init(void);
+static void MX_RNG_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-
+void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status);
+void mqtt_pub_request_cb(void *arg, err_t result);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status) {
+    if (status == MQTT_CONNECT_ACCEPTED) {
+        printf("MQTT: Connected successfully!\n");
+    } else {
+        printf("MQTT: Disconnected, status: %d\n", status);
+    }
+}
+
+void mqtt_pub_request_cb(void *arg, err_t result) {
+    if (result != ERR_OK) {
+        printf("MQTT: Publish failed: %d\n", result);
+    }
+}
+
 int _write(int file, char *ptr, int len)
 {
     return (HAL_UART_Transmit(&hlpuart1, (uint8_t*)ptr, len, 100) == HAL_OK) ? len : 0;
@@ -99,8 +120,8 @@ void print_netif_info(struct netif *netif)
         strcpy(macbuf, "N/A");
     }
 
-    const char *link = netif_is_link_up(netif) ? "UP" : "DOWN";
-    const char *up   = netif_is_up(netif) ? "YES" : "NO";
+    const char *link = netif_is_link_up(netif) ? "up" : "down";
+    const char *up   = netif_is_up(netif) ? "yes" : "no";
 
 #if LWIP_DHCP
     const char *dhcp_state = "not used";
@@ -111,13 +132,8 @@ void print_netif_info(struct netif *netif)
     const char *dhcp_state = "disabled";
 #endif
 
-    printf("=== netif '%c%c' ===\n", netif->name[0], netif->name[1]);
-    printf("Link: %s, If up: %s, DHCP: %s\n", link, up, dhcp_state);
-    printf("IP: %s\n", ipbuf);
-    printf("Netmask: %s\n", nmbuf);
-    printf("Gateway: %s\n", gwbuf);
-    printf("MAC: %s\n", macbuf);
-    printf("====================\n");
+    printf("link: %s, netif_is_up: %s, dhcp: %s, netif '%c'\n", link, up, dhcp_state, netif->name[0]);
+    printf("ip: %s, netmask: %s, gateway: %s, mac: %s\n", ipbuf, nmbuf, gwbuf, macbuf);
 }
 /* USER CODE END 0 */
 
@@ -162,6 +178,7 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_LPUART1_UART_Init();
+  MX_RNG_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -235,8 +252,9 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI48|RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSI48State = RCC_HSI48_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 5;
@@ -320,6 +338,33 @@ static void MX_LPUART1_UART_Init(void)
 }
 
 /**
+  * @brief RNG Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_RNG_Init(void)
+{
+
+  /* USER CODE BEGIN RNG_Init 0 */
+
+  /* USER CODE END RNG_Init 0 */
+
+  /* USER CODE BEGIN RNG_Init 1 */
+
+  /* USER CODE END RNG_Init 1 */
+  hrng.Instance = RNG;
+  hrng.Init.ClockErrorDetection = RNG_CED_ENABLE;
+  if (HAL_RNG_Init(&hrng) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN RNG_Init 2 */
+
+  /* USER CODE END RNG_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -354,19 +399,50 @@ static void MX_GPIO_Init(void)
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument)
 {
-  /* init code for LWIP */
   MX_LWIP_Init();
-  /* USER CODE BEGIN 5 */
-
+  
   struct netif *netif = netif_list;
   print_netif_info(netif);
 
-  /* Infinite loop */
+  IP4_ADDR(&broker_ip, 192, 168, 1, 200); 
+  
+  static_client = mqtt_client_new();
+
+  struct mqtt_connect_client_info_t ci;
+  memset(&ci, 0, sizeof(ci));
+  ci.client_id = "STM32_H7";
+
+  if (mqtt_client_connect(static_client, &broker_ip, 1883, mqtt_connection_cb, 0, &ci) != ERR_OK) {
+      printf("MQTT: Failed to initiate connection\n");
+  }
+
+  char payload[64];
+  uint32_t counter = 0;
+
+  /*
+    Run mosquitto broker locally for testing:
+        .\mosquitto.exe -c test.conf -v
+
+    test.conf:
+        listener 1883
+        allow_anonymous true
+  */
+
   for(;;)
   {
-    osDelay(1);
+    if (mqtt_client_is_connected(static_client)) {
+        sprintf(payload, "Hello from STM32! Counter: %lu", counter++);
+        
+        err_t err = mqtt_publish(static_client, topic, payload, strlen(payload), 0, 0, mqtt_pub_request_cb, NULL);
+        if (err != ERR_OK) {
+            printf("MQTT: Publish error: %d\n", err);
+        } else {
+            printf("MQTT: Published: %s\n", payload);
+        }
+    }
+    
+    osDelay(5000); 
   }
-  /* USER CODE END 5 */
 }
 
  /* MPU Configuration */
