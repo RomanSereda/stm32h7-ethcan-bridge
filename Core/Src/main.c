@@ -422,9 +422,10 @@ void StartDefaultTask(void *argument)
   /*
     Run mosquitto broker locally for testing:
         .\mosquitto.exe -c test.conf -v
+        .\mosquitto_sub.exe -h 192.168.1.200 -t "#" -v
 
     test.conf:
-        listener 1883
+        listener 1883 0.0.0.0
         allow_anonymous true
   */
 
@@ -441,7 +442,7 @@ void StartDefaultTask(void *argument)
         }
     }
     
-    osDelay(5000); 
+    osDelay(1000); 
   }
 }
 
