@@ -23,7 +23,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "string.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,6 +43,8 @@
 
 /* Private variables ---------------------------------------------------------*/
 
+UART_HandleTypeDef hlpuart1;
+
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
@@ -58,6 +60,7 @@ const osThreadAttr_t defaultTask_attributes = {
 void SystemClock_Config(void);
 static void MPU_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_LPUART1_UART_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
@@ -66,7 +69,56 @@ void StartDefaultTask(void *argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+int _write(int file, char *ptr, int len)
+{
+    return (HAL_UART_Transmit(&hlpuart1, (uint8_t*)ptr, len, 100) == HAL_OK) ? len : 0;
+}
 
+void print_netif_info(struct netif *netif)
+{
+    if (netif == NULL) {
+        printf("netif == NULL\n");
+        return;
+    }
+
+    char ipbuf[16], gwbuf[16], nmbuf[16];
+
+    ipaddr_ntoa_r(&netif->ip_addr, ipbuf, sizeof(ipbuf));
+    ipaddr_ntoa_r(&netif->gw, gwbuf, sizeof(gwbuf));
+    ipaddr_ntoa_r(&netif->netmask, nmbuf, sizeof(nmbuf));
+
+    char macbuf[3*NETIF_MAX_HWADDR_LEN];
+    int maclen = netif->hwaddr_len;
+    if (maclen > 0 && maclen <= NETIF_MAX_HWADDR_LEN) {
+        char *p = macbuf;
+        for (int i = 0; i < maclen; ++i) {
+            if (i == 0) p += sprintf(p, "%02X", netif->hwaddr[i]);
+            else p += sprintf(p, ":%02X", netif->hwaddr[i]);
+        }
+    } else {
+        strcpy(macbuf, "N/A");
+    }
+
+    const char *link = netif_is_link_up(netif) ? "UP" : "DOWN";
+    const char *up   = netif_is_up(netif) ? "YES" : "NO";
+
+#if LWIP_DHCP
+    const char *dhcp_state = "not used";
+    if (netif->dhcp != NULL) {
+        dhcp_state = "client active";
+    }
+#else
+    const char *dhcp_state = "disabled";
+#endif
+
+    printf("=== netif '%c%c' ===\n", netif->name[0], netif->name[1]);
+    printf("Link: %s, If up: %s, DHCP: %s\n", link, up, dhcp_state);
+    printf("IP: %s\n", ipbuf);
+    printf("Netmask: %s\n", nmbuf);
+    printf("Gateway: %s\n", gwbuf);
+    printf("MAC: %s\n", macbuf);
+    printf("====================\n");
+}
 /* USER CODE END 0 */
 
 /**
@@ -109,6 +161,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_LPUART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -219,6 +272,54 @@ void SystemClock_Config(void)
 }
 
 /**
+  * @brief LPUART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_LPUART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN LPUART1_Init 0 */
+
+  /* USER CODE END LPUART1_Init 0 */
+
+  /* USER CODE BEGIN LPUART1_Init 1 */
+
+  /* USER CODE END LPUART1_Init 1 */
+  hlpuart1.Instance = LPUART1;
+  hlpuart1.Init.BaudRate = 115200;
+  hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
+  hlpuart1.Init.StopBits = UART_STOPBITS_1;
+  hlpuart1.Init.Parity = UART_PARITY_NONE;
+  hlpuart1.Init.Mode = UART_MODE_TX_RX;
+  hlpuart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  hlpuart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  hlpuart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  hlpuart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  hlpuart1.FifoMode = UART_FIFOMODE_DISABLE;
+  if (HAL_UART_Init(&hlpuart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetTxFifoThreshold(&hlpuart1, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetRxFifoThreshold(&hlpuart1, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_DisableFifoMode(&hlpuart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN LPUART1_Init 2 */
+
+  /* USER CODE END LPUART1_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -256,6 +357,10 @@ void StartDefaultTask(void *argument)
   /* init code for LWIP */
   MX_LWIP_Init();
   /* USER CODE BEGIN 5 */
+
+  struct netif *netif = netif_list;
+  print_netif_info(netif);
+
   /* Infinite loop */
   for(;;)
   {
