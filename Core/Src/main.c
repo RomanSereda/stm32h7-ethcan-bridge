@@ -24,6 +24,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "string.h"
+#include "stdio.h"
 #include "lwip/apps/mqtt.h"
 /* USER CODE END Includes */
 
@@ -52,15 +53,21 @@ RNG_HandleTypeDef hrng;
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 2048 * 4,
+  .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
+osMutexId_t uartMutexHandle;
+const osMutexAttr_t uartMutex_attributes = {
+  .name = "uartMutex"
+};
+
 mqtt_client_t *static_client;
 ip_addr_t broker_ip;
 const char *topic = "stm32/test";
 volatile uint8_t mqtt_connected = 0;
 volatile uint8_t publish_in_progress = 0;
+uint32_t last_publish_attempt = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -78,29 +85,36 @@ void mqtt_pub_request_cb(void *arg, err_t result);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+int _write(int file, char *ptr, int len)
+{
+    if (osKernelGetState() == osKernelRunning && uartMutexHandle != NULL) {
+        osMutexAcquire(uartMutexHandle, osWaitForever);
+    }
+    HAL_UART_Transmit(&hlpuart1, (uint8_t*)ptr, len, 100);
+    if (osKernelGetState() == osKernelRunning && uartMutexHandle != NULL) {
+        osMutexRelease(uartMutexHandle);
+    }
+    return len;
+}
+
 void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status) {
     if (status == MQTT_CONNECT_ACCEPTED) {
         printf("MQTT: Connected successfully!\n");
         mqtt_connected = 1;
     } else {
-        printf("MQTT: Disconnected, status: %d\n", status);
+        printf("MQTT: Connection failed, status: %d\n", status);
         mqtt_connected = 0;
         publish_in_progress = 0;
     }
 }
 
 void mqtt_pub_request_cb(void *arg, err_t result) {
-    publish_in_progress = 0;
+    publish_in_progress = 0; 
     if (result != ERR_OK) {
-        printf("MQTT: Publish failed: %d\n", result);
+        printf("MQTT: Pub request err: %d\n", result);
     } else {
-        printf("MQTT: Publish OK\n");
+        printf("MQTT: Pub request OK\n");
     }
-}
-
-int _write(int file, char *ptr, int len)
-{
-    return (HAL_UART_Transmit(&hlpuart1, (uint8_t*)ptr, len, 100) == HAL_OK) ? len : 0;
 }
 
 void print_netif_info(struct netif *netif)
@@ -195,7 +209,7 @@ int main(void)
   osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
+  uartMutexHandle = osMutexNew(&uartMutex_attributes);
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -445,24 +459,29 @@ void StartDefaultTask(void *argument)
         continue;
     }
     
+    if (publish_in_progress && (HAL_GetTick() - last_publish_attempt > 10000)) {
+        printf("MQTT: Timeout detected, force reset flag\n");
+        publish_in_progress = 0;
+    }
+
     if (mqtt_connected && !publish_in_progress) {
-        sprintf(payload, "Hello from STM32! Counter: %lu", counter++);
+        sprintf(payload, "Hello H7! Count: %lu", counter);
         
         publish_in_progress = 1;
+        last_publish_attempt = HAL_GetTick();
+
         err_t err = mqtt_publish(static_client, topic, payload, strlen(payload), 
                                  0, 0, mqtt_pub_request_cb, NULL);
         
-        if (err != ERR_OK) {
-            printf("MQTT: Publish error: %d\n", err);
+        if (err == ERR_OK) {
+            printf("MQTT: Publishing %lu...\n", counter++);
+        } else {
+            printf("MQTT: Pub immediate err: %d\n", err);
             publish_in_progress = 0;
-            
-            if (err == ERR_CONN) {
-                mqtt_connected = 0;
-            }
         }
     }
     
-    osDelay(3000);
+    osDelay(100); 
   }
 }
 

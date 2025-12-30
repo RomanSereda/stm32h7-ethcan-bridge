@@ -30,7 +30,8 @@
 
 /* Within 'USER CODE' section, code will be kept by default at each generation */
 /* USER CODE BEGIN 0 */
-
+#define MQTT_OUTPUT_RINGBUF_SIZE 1024
+#define MQTT_VAR_HEADER_BUFFER_LEN 1024
 /* USER CODE END 0 */
 
 #ifdef __cplusplus
