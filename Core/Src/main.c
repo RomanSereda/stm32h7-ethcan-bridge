@@ -52,13 +52,15 @@ RNG_HandleTypeDef hrng;
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 1024 * 4,
+  .stack_size = 2048 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
 mqtt_client_t *static_client;
 ip_addr_t broker_ip;
 const char *topic = "stm32/test";
+volatile uint8_t mqtt_connected = 0;
+volatile uint8_t publish_in_progress = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -79,14 +81,20 @@ void mqtt_pub_request_cb(void *arg, err_t result);
 void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status) {
     if (status == MQTT_CONNECT_ACCEPTED) {
         printf("MQTT: Connected successfully!\n");
+        mqtt_connected = 1;
     } else {
         printf("MQTT: Disconnected, status: %d\n", status);
+        mqtt_connected = 0;
+        publish_in_progress = 0;
     }
 }
 
 void mqtt_pub_request_cb(void *arg, err_t result) {
+    publish_in_progress = 0;
     if (result != ERR_OK) {
         printf("MQTT: Publish failed: %d\n", result);
+    } else {
+        printf("MQTT: Publish OK\n");
     }
 }
 
@@ -404,6 +412,11 @@ void StartDefaultTask(void *argument)
   struct netif *netif = netif_list;
   print_netif_info(netif);
 
+  while (!netif_is_link_up(netif) || !netif_is_up(netif)) {
+      osDelay(100);
+  }
+  printf("Network is UP!\n");
+
   IP4_ADDR(&broker_ip, 192, 168, 1, 200); 
   
   static_client = mqtt_client_new();
@@ -411,38 +424,45 @@ void StartDefaultTask(void *argument)
   struct mqtt_connect_client_info_t ci;
   memset(&ci, 0, sizeof(ci));
   ci.client_id = "STM32_H7";
-
-  if (mqtt_client_connect(static_client, &broker_ip, 1883, mqtt_connection_cb, 0, &ci) != ERR_OK) {
-      printf("MQTT: Failed to initiate connection\n");
-  }
+  ci.keep_alive = 60;
 
   char payload[64];
   uint32_t counter = 0;
 
-  /*
-    Run mosquitto broker locally for testing:
-        .\mosquitto.exe -c test.conf -v
-        .\mosquitto_sub.exe -h 192.168.1.200 -t "#" -v
-
-    test.conf:
-        listener 1883 0.0.0.0
-        allow_anonymous true
-  */
-
   for(;;)
   {
-    if (mqtt_client_is_connected(static_client)) {
+    if (!mqtt_client_is_connected(static_client)) {
+        printf("MQTT: Not connected, connecting...\n");
+        mqtt_connected = 0;
+        publish_in_progress = 0;
+        
+        err_t err = mqtt_client_connect(static_client, &broker_ip, 1883, 
+                                        mqtt_connection_cb, 0, &ci);
+        if (err != ERR_OK) {
+            printf("MQTT: Connect failed with error: %d\n", err);
+        }
+        osDelay(5000); 
+        continue;
+    }
+    
+    if (mqtt_connected && !publish_in_progress) {
         sprintf(payload, "Hello from STM32! Counter: %lu", counter++);
         
-        err_t err = mqtt_publish(static_client, topic, payload, strlen(payload), 0, 0, mqtt_pub_request_cb, NULL);
+        publish_in_progress = 1;
+        err_t err = mqtt_publish(static_client, topic, payload, strlen(payload), 
+                                 0, 0, mqtt_pub_request_cb, NULL);
+        
         if (err != ERR_OK) {
             printf("MQTT: Publish error: %d\n", err);
-        } else {
-            printf("MQTT: Published: %s\n", payload);
+            publish_in_progress = 0;
+            
+            if (err == ERR_CONN) {
+                mqtt_connected = 0;
+            }
         }
     }
     
-    osDelay(1000); 
+    osDelay(3000);
   }
 }
 
@@ -459,7 +479,7 @@ void MPU_Config(void)
   */
   MPU_InitStruct.Enable = MPU_REGION_ENABLE;
   MPU_InitStruct.BaseAddress = 0x30000000;
-  MPU_InitStruct.Size = MPU_REGION_SIZE_64KB;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_128KB;
   MPU_InitStruct.SubRegionDisable = 0x0;
   MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL1;
   MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;

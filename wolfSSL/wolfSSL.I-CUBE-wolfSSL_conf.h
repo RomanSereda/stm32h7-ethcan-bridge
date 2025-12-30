@@ -49,7 +49,7 @@
 #define WOLF_CONF_MATH      6
 
 /*---------- WOLF_CONF_RTOS -----------*/
-#define WOLF_CONF_RTOS      1
+#define WOLF_CONF_RTOS      2
 
 /*---------- WOLF_CONF_RNG -----------*/
 #define WOLF_CONF_RNG      1

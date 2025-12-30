@@ -31,7 +31,7 @@
 	MiddleWare version :
 */
 /*---------- WOLFMQTT_CONF_FREERTOS -----------*/
-#define WOLFMQTT_CONF_FREERTOS      0
+#define WOLFMQTT_CONF_FREERTOS      1
 
 /*---------- WOLFMQTT_CONF_TLS -----------*/
 #define WOLFMQTT_CONF_TLS      1
