@@ -1,0 +1,31 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Cortex Debug",
+            "cwd": "${workspaceRoot}",
+            "executable": "${command:cmake.launchTargetPath}",
+            "request": "launch",
+            "type": "cortex-debug",
+            "servertype": "openocd",
+            "device": "STM32H743II",
+            "gdbPath": "arm-none-eabi-gdb",
+            "serverpath": "openocd",
+            "interface": "swd",
+            "configFiles": [
+                "interface/cmsis-dap.cfg",
+                "target/stm32h7x.cfg"
+            ],
+            "overrideLaunchCommands": [
+                "interpreter-exec mi \"-gdb-set target-async on\"",
+                "target extended-remote :50000",
+                "monitor reset halt",
+                "load",
+                "monitor reset halt"
+            ],
+            "svdFile": "${workspaceRoot}/STM32H743.svd",
+            "showDevDebugOutput": "raw",
+            "preLaunchTask": "prime-and-clean-hidden"
+        }
+    ]
+}   

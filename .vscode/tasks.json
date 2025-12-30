@@ -1,0 +1,19 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+        {
+          "label": "prime-and-clean-hidden",
+          "type": "shell",
+          "command": "powershell",
+          "args": [
+            "-NoProfile",
+            "-Command",
+            "Get-Process -Name openocd -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }; ",
+            "Get-Process -Name 'arm-none-eabi-gdb' -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }; ",
+            "& { & 'arm-none-eabi-gdb' -q --interpreter=mi2 -ex \"echo primed\" -ex \"quit\" } ; Start-Sleep -Milliseconds 300"
+          ],
+          "presentation": { "reveal": "silent", "panel": "shared" },
+          "problemMatcher": []
+        }
+    ]
+}
