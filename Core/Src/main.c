@@ -27,6 +27,8 @@
 #include "stdio.h"
 #include "print_output.h"
 #include "mqtt_client.h"
+#include "can_iface.h"
+#include "can_ctrl.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -62,6 +64,7 @@ const osThreadAttr_t defaultTask_attributes = {
 /* USER CODE BEGIN PV */
 mqtt_client_handle_t mqtt_handle;
 const char *topic = "stm32/test";
+can_ctrl_handle_t  can_ctrl;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -407,7 +410,6 @@ static void MX_GPIO_Init(void)
   */
 void StartDefaultTask(void *argument)
 {
-  /* Init Output Interface first to enable printf */
   print_output_init(&hlpuart1);
     
   MX_LWIP_Init();
@@ -419,8 +421,17 @@ void StartDefaultTask(void *argument)
   IP4_ADDR(&target_ip, 192, 168, 1, 200); 
   mqtt_client_init(&mqtt_handle, &target_ip, "STM32_H7");
 
-  char payload[64];
   uint32_t counter = 0;
+
+  can_ctrl_status_t ctrl_status;
+  can_ctrl_resp_t resp;
+  
+  uint32_t ids[] = {0x100, 0x101};
+  if (can_ctrl_init(&can_ctrl, &hfdcan1, ids, 2) != CAN_CTRL_OK)
+  {
+      printf("CAN CTRL init error!\n");
+      return;
+  }
 
   for(;;)
   {
@@ -436,13 +447,15 @@ void StartDefaultTask(void *argument)
 
     if (mqtt_handle.is_connected && !mqtt_handle.pub_in_progress) 
     {
-        sprintf(payload, "Hello H7! Count: %lu", counter);
-        
-        err_t err = mqtt_client_publish(&mqtt_handle, topic, payload);
-        
-        if (err == ERR_OK) 
+        ctrl_status = can_ctrl_request_sync(&can_ctrl, 0, false, &resp);
+
+        if (ctrl_status == CAN_CTRL_OK)
         {
-            printf("MQTT: Publishing %lu...\n", counter++);
+            err_t err = mqtt_client_publish(&mqtt_handle, topic, (const char*)resp.msg.data);
+            if (err == ERR_OK) 
+            {
+                printf("MQTT: Publishing %lu...\n", counter++);
+            }
         } 
     }
     
