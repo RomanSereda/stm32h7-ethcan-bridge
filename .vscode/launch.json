@@ -9,28 +9,19 @@
             "type": "cortex-debug",
             "servertype": "openocd",
             "device": "STM32H743II",
-            "gdbPath": "arm-none-eabi-gdb.exe", 
+            "gdbPath": "arm-none-eabi-gdb.exe",
             "serverpath": "openocd",
             "interface": "swd",
-            "gdbTarget": "localhost:50000", 
+            "gdbTarget": "localhost:50000",
             "configFiles": [
                 "interface/cmsis-dap.cfg",
                 "target/stm32h7x.cfg"
             ],
             "openOCDPreConfigLaunchCommands": [
                 "set CONNECT_UNDER_RESET 1",
-                "adapter speed 2000"
+                "adapter speed 1000"
             ],
-            "overrideLaunchCommands": [
-                "target extended-remote :50000",
-                "monitor reset halt",
-                "load",
-                "monitor reset halt"
-            ],
-            "postLaunchCommands": [
-                "monitor reset init"
-            ],
-            "svdFile": "${workspaceRoot}/STM32H743.svd",
+            "svdFile": "${workspaceFolder}/STM32H743.svd",
             "showDevDebugOutput": "raw"
         }
     ]
