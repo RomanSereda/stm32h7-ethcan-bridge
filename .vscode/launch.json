@@ -19,7 +19,7 @@
             ],
             "openOCDPreConfigLaunchCommands": [
                 "set CONNECT_UNDER_RESET 1",
-                "adapter speed 4000"
+                "adapter speed 2000"
             ],
             "overrideLaunchCommands": [
                 "target extended-remote :50000",

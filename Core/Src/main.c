@@ -25,7 +25,8 @@
 /* USER CODE BEGIN Includes */
 #include "string.h"
 #include "stdio.h"
-#include "lwip/apps/mqtt.h"
+#include "print_output.h"
+#include "mqtt_client.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -57,17 +58,8 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
-osMutexId_t uartMutexHandle;
-const osMutexAttr_t uartMutex_attributes = {
-  .name = "uartMutex"
-};
-
-mqtt_client_t *static_client;
-ip_addr_t broker_ip;
+mqtt_client_handle_t mqtt_handle;
 const char *topic = "stm32/test";
-volatile uint8_t mqtt_connected = 0;
-volatile uint8_t publish_in_progress = 0;
-uint32_t last_publish_attempt = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -79,84 +71,11 @@ static void MX_RNG_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status);
-void mqtt_pub_request_cb(void *arg, err_t result);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-int _write(int file, char *ptr, int len)
-{
-    if (osKernelGetState() == osKernelRunning && uartMutexHandle != NULL) {
-        osMutexAcquire(uartMutexHandle, osWaitForever);
-    }
-    HAL_UART_Transmit(&hlpuart1, (uint8_t*)ptr, len, 100);
-    if (osKernelGetState() == osKernelRunning && uartMutexHandle != NULL) {
-        osMutexRelease(uartMutexHandle);
-    }
-    return len;
-}
-
-void mqtt_connection_cb(mqtt_client_t *client, void *arg, mqtt_connection_status_t status) {
-    if (status == MQTT_CONNECT_ACCEPTED) {
-        printf("MQTT: Connected successfully!\n");
-        mqtt_connected = 1;
-    } else {
-        printf("MQTT: Connection failed, status: %d\n", status);
-        mqtt_connected = 0;
-        publish_in_progress = 0;
-    }
-}
-
-void mqtt_pub_request_cb(void *arg, err_t result) {
-    publish_in_progress = 0; 
-    if (result != ERR_OK) {
-        printf("MQTT: Pub request err: %d\n", result);
-    } else {
-        printf("MQTT: Pub request OK\n");
-    }
-}
-
-void print_netif_info(struct netif *netif)
-{
-    if (netif == NULL) {
-        printf("netif == NULL\n");
-        return;
-    }
-
-    char ipbuf[16], gwbuf[16], nmbuf[16];
-
-    ipaddr_ntoa_r(&netif->ip_addr, ipbuf, sizeof(ipbuf));
-    ipaddr_ntoa_r(&netif->gw, gwbuf, sizeof(gwbuf));
-    ipaddr_ntoa_r(&netif->netmask, nmbuf, sizeof(nmbuf));
-
-    char macbuf[3*NETIF_MAX_HWADDR_LEN];
-    int maclen = netif->hwaddr_len;
-    if (maclen > 0 && maclen <= NETIF_MAX_HWADDR_LEN) {
-        char *p = macbuf;
-        for (int i = 0; i < maclen; ++i) {
-            if (i == 0) p += sprintf(p, "%02X", netif->hwaddr[i]);
-            else p += sprintf(p, ":%02X", netif->hwaddr[i]);
-        }
-    } else {
-        strcpy(macbuf, "N/A");
-    }
-
-    const char *link = netif_is_link_up(netif) ? "up" : "down";
-    const char *up   = netif_is_up(netif) ? "yes" : "no";
-
-#if LWIP_DHCP
-    const char *dhcp_state = "not used";
-    if (netif->dhcp != NULL) {
-        dhcp_state = "client active";
-    }
-#else
-    const char *dhcp_state = "disabled";
-#endif
-
-    printf("link: %s, netif_is_up: %s, dhcp: %s, netif '%c'\n", link, up, dhcp_state, netif->name[0]);
-    printf("ip: %s, netmask: %s, gateway: %s, mac: %s\n", ipbuf, nmbuf, gwbuf, macbuf);
-}
 /* USER CODE END 0 */
 
 /**
@@ -209,7 +128,7 @@ int main(void)
   osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
-  uartMutexHandle = osMutexNew(&uartMutex_attributes);
+
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -419,66 +338,54 @@ static void MX_GPIO_Init(void)
   * @retval None
   */
 /* USER CODE END Header_StartDefaultTask */
+  /*
+    Run mosquitto broker locally for testing:
+        .\mosquitto.exe -c test.conf -v
+        .\mosquitto_sub.exe -h 192.168.1.200 -t "#" -v
+
+    test.conf:
+        listener 1883 0.0.0.0
+        allow_anonymous true
+  */
 void StartDefaultTask(void *argument)
 {
+  /* Init Output Interface first to enable printf */
+  print_output_init(&hlpuart1);
+    
   MX_LWIP_Init();
-  
+   
   struct netif *netif = netif_list;
-  print_netif_info(netif);
+  print_output_netif_info(netif);
 
-  while (!netif_is_link_up(netif) || !netif_is_up(netif)) {
-      osDelay(100);
-  }
-  printf("Network is UP!\n");
-
-  IP4_ADDR(&broker_ip, 192, 168, 1, 200); 
-  
-  static_client = mqtt_client_new();
-
-  struct mqtt_connect_client_info_t ci;
-  memset(&ci, 0, sizeof(ci));
-  ci.client_id = "STM32_H7";
-  ci.keep_alive = 60;
+  ip_addr_t target_ip;
+  IP4_ADDR(&target_ip, 192, 168, 1, 200); 
+  mqtt_client_init(&mqtt_handle, &target_ip, "STM32_H7");
 
   char payload[64];
   uint32_t counter = 0;
 
   for(;;)
   {
-    if (!mqtt_client_is_connected(static_client)) {
-        printf("MQTT: Not connected, connecting...\n");
-        mqtt_connected = 0;
-        publish_in_progress = 0;
-        
-        err_t err = mqtt_client_connect(static_client, &broker_ip, 1883, 
-                                        mqtt_connection_cb, 0, &ci);
-        if (err != ERR_OK) {
-            printf("MQTT: Connect failed with error: %d\n", err);
+    if (!mqtt_client_is_connected(mqtt_handle.client)) 
+    {
+        if (mqtt_client_connect_process(&mqtt_handle) != ERR_OK)
+        {
+            continue; 
         }
-        osDelay(5000); 
-        continue;
-    }
-    
-    if (publish_in_progress && (HAL_GetTick() - last_publish_attempt > 10000)) {
-        printf("MQTT: Timeout detected, force reset flag\n");
-        publish_in_progress = 0;
     }
 
-    if (mqtt_connected && !publish_in_progress) {
+    mqtt_client_check_timeout(&mqtt_handle);
+
+    if (mqtt_handle.is_connected && !mqtt_handle.pub_in_progress) 
+    {
         sprintf(payload, "Hello H7! Count: %lu", counter);
         
-        publish_in_progress = 1;
-        last_publish_attempt = HAL_GetTick();
-
-        err_t err = mqtt_publish(static_client, topic, payload, strlen(payload), 
-                                 0, 0, mqtt_pub_request_cb, NULL);
+        err_t err = mqtt_client_publish(&mqtt_handle, topic, payload);
         
-        if (err == ERR_OK) {
+        if (err == ERR_OK) 
+        {
             printf("MQTT: Publishing %lu...\n", counter++);
-        } else {
-            printf("MQTT: Pub immediate err: %d\n", err);
-            publish_in_progress = 0;
-        }
+        } 
     }
     
     osDelay(100); 
@@ -552,7 +459,7 @@ void Error_Handler(void)
 #ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
+  * where the assert_param error has occurred.
   * @param  file: pointer to the source file name
   * @param  line: assert_param error line source number
   * @retval None
