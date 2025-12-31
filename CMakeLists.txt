@@ -47,6 +47,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     ${CMAKE_CURRENT_SOURCE_DIR}/User/print_output.c
     ${CMAKE_CURRENT_SOURCE_DIR}/User/mqtt_client.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/User/can_ctrl.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/User/can_iface.c
 )
 
 # Add include paths
