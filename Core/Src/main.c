@@ -27,7 +27,6 @@
 #include "stdio.h"
 #include "print_output.h"
 #include "mqtt_client.h"
-#include "can_iface.h"
 #include "can_ctrl.h"
 /* USER CODE END Includes */
 
@@ -54,6 +53,8 @@ UART_HandleTypeDef hlpuart1;
 
 RNG_HandleTypeDef hrng;
 
+TIM_HandleTypeDef htim17;
+
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
@@ -63,8 +64,8 @@ const osThreadAttr_t defaultTask_attributes = {
 };
 /* USER CODE BEGIN PV */
 mqtt_client_handle_t mqtt_handle;
-const char *topic = "stm32/test";
-can_ctrl_handle_t  can_ctrl;
+const char *topic = "stm32/canopen/data";
+can_ctrl_handle_t can_ctrl;  // CANopen controller
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -74,6 +75,7 @@ static void MX_GPIO_Init(void);
 static void MX_LPUART1_UART_Init(void);
 static void MX_RNG_Init(void);
 static void MX_FDCAN1_Init(void);
+static void MX_TIM17_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
@@ -127,6 +129,7 @@ int main(void)
   MX_LPUART1_UART_Init();
   MX_RNG_Init();
   MX_FDCAN1_Init();
+  MX_TIM17_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -366,6 +369,38 @@ static void MX_RNG_Init(void)
 }
 
 /**
+  * @brief TIM17 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM17_Init(void)
+{
+
+  /* USER CODE BEGIN TIM17_Init 0 */
+
+  /* USER CODE END TIM17_Init 0 */
+
+  /* USER CODE BEGIN TIM17_Init 1 */
+
+  /* USER CODE END TIM17_Init 1 */
+  htim17.Instance = TIM17;
+  htim17.Init.Prescaler = 479;
+  htim17.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim17.Init.Period = 999;
+  htim17.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim17.Init.RepetitionCounter = 0;
+  htim17.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim17) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM17_Init 2 */
+
+  /* USER CODE END TIM17_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -411,52 +446,94 @@ static void MX_GPIO_Init(void)
 void StartDefaultTask(void *argument)
 {
   print_output_init(&hlpuart1);
+  printf("=== STM32H7 CANopen-MQTT Bridge ===\n");
     
   MX_LWIP_Init();
    
   struct netif *netif = netif_list;
   print_output_netif_info(netif);
 
+  // MQTT setup
   ip_addr_t target_ip;
   IP4_ADDR(&target_ip, 192, 168, 1, 200); 
-  mqtt_client_init(&mqtt_handle, &target_ip, "STM32_H7");
+  mqtt_client_init(&mqtt_handle, &target_ip, "STM32_CANopen");
+
+  // CANopen setup - monitor remote nodes
+  uint8_t remote_nodes[] = {10, 11};  // Example: monitor nodes 10 and 11
+  can_ctrl_status_t status = can_ctrl_init(&can_ctrl, &hfdcan1, &htim17, 
+                                           remote_nodes, 2);
+  
+  if (status != CAN_CTRL_OK)
+  {
+      printf("ERROR: CANopen init failed with status %d\n", status);
+      Error_Handler();
+  }
+  
+  printf("CANopen controller initialized\n");
+  printf("Monitoring remote nodes: %d, %d\n", remote_nodes[0], remote_nodes[1]);
 
   uint32_t counter = 0;
-
-  can_ctrl_status_t ctrl_status;
-  can_ctrl_resp_t resp;
-  
-  uint32_t ids[] = {0x100, 0x101};
-  if (can_ctrl_init(&can_ctrl, &hfdcan1, ids, 2) != CAN_CTRL_OK)
-  {
-      printf("CAN CTRL init error!\n");
-      return;
-  }
+  uint32_t last_publish_time = 0;
+  const uint32_t publish_interval_ms = 1000;  // Publish every 1 second
 
   for(;;)
   {
+    // MQTT connection handling
     if (!mqtt_client_is_connected(mqtt_handle.client)) 
     {
         if (mqtt_client_connect_process(&mqtt_handle) != ERR_OK)
         {
+            osDelay(100);
             continue; 
         }
     }
 
     mqtt_client_check_timeout(&mqtt_handle);
 
-    if (mqtt_handle.is_connected && !mqtt_handle.pub_in_progress) 
+    // Wait for CANopen to be operational
+    if (!can_ctrl_is_operational(&can_ctrl))
     {
-        ctrl_status = can_ctrl_request_sync(&can_ctrl, 0, false, &resp);
-
-        if (ctrl_status == CAN_CTRL_OK)
+        if (counter % 50 == 0) // Print every 5 seconds
         {
-            err_t err = mqtt_client_publish(&mqtt_handle, topic, (const char*)resp.msg.data);
+            uint8_t nmt_state = can_ctrl_get_nmt_state(&can_ctrl);
+            printf("Waiting for CANopen operational state (current: %d)...\n", nmt_state);
+        }
+        counter++;
+        osDelay(100);
+        continue;
+    }
+
+    // Publish PDO data via MQTT periodically
+    uint32_t current_time = HAL_GetTick();
+    if (mqtt_handle.is_connected && 
+        !mqtt_handle.pub_in_progress && 
+        (current_time - last_publish_time >= publish_interval_ms))
+    {
+        // Get PDO data from first remote node
+        can_ctrl_resp_t resp;
+        if (can_ctrl_get_pdo_data(&can_ctrl, remote_nodes[0], &resp) == CAN_CTRL_OK)
+        {
+            // Format data for MQTT
+            char payload[64];
+            snprintf(payload, sizeof(payload), 
+                    "Node%d: %02X %02X %02X %02X %02X %02X %02X %02X",
+                    remote_nodes[0],
+                    resp.pdo_data.data[0], resp.pdo_data.data[1],
+                    resp.pdo_data.data[2], resp.pdo_data.data[3],
+                    resp.pdo_data.data[4], resp.pdo_data.data[5],
+                    resp.pdo_data.data[6], resp.pdo_data.data[7]);
+            
+            err_t err = mqtt_client_publish(&mqtt_handle, topic, payload);
             if (err == ERR_OK) 
             {
-                printf("MQTT: Publishing %lu...\n", counter++);
+                printf("MQTT: Published PDO data #%lu\n", counter++);
+                last_publish_time = current_time;
             }
-        } 
+        }
+        else
+        {
+            printf("No PDO data from node %d yet\n", remote_nodes[0]);
+        }
     }
     
     osDelay(100); 
@@ -502,7 +579,10 @@ void MPU_Config(void)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
-
+  if (htim->Instance == TIM17)
+  {
+    can_ctrl_timer_interrupt(&can_ctrl);
+  }
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM8)
   {
